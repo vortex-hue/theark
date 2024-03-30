@@ -4,7 +4,8 @@ from sqlalchemy.orm import Session
 import models
 from models import AsyncSessionLocal, engine, Wallet
 from pydantic import BaseModel
-from typing import List
+from typing import List, Any
+from starlette.responses import JSONResponse
 import aiohttp
 import asyncio
 from sqlalchemy.future import select
@@ -15,6 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import json
 from collections import defaultdict
+import aiohttp
 
 ## sami ai analysis
 from sami_ai import sami_ai
@@ -23,8 +25,8 @@ from sami_ai import sami_ai
 app = FastAPI()
 
 MORALIS_API_URL = 'https://deep-index.moralis.io/api/v2/{address}/erc20/transfers'
-MORALIS_API_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjFjZGRmZWFiLTllYjgtNDM0NS05NjRmLWM0NjIxOTZhNGI2YyIsIm9yZ0lkIjoiMzgyMzY3IiwidXNlcklkIjoiMzkyODg4IiwidHlwZUlkIjoiNDdkNzNlNDQtMzQ3MS00MDlmLTkxY2QtNDllMTJjNmI2YjY4IiwidHlwZSI6IlBST0pFQ1QiLCJpYXQiOjE3MTAxOTA2MTUsImV4cCI6NDg2NTk1MDYxNX0.bmYG9dUG2grEjbaBXk26nZ3ZtQ0ftyn4C8CadLF8IKk'
-import aiohttp  # Make sure to import aiohttp at the top of your file
+MORALIS_API_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6ImM5Y2ZiODg5LTgwYzMtNDViNy1hYzZjLTQ0YzM3MTVlNDRjZCIsIm9yZ0lkIjoiMzg1NDg4IiwidXNlcklkIjoiMzk2MDk3IiwidHlwZUlkIjoiNmNmMGE3NjEtZGFmZC00NzFhLThlZjktOGQ1MGViYzQ0NDNhIiwidHlwZSI6IlBST0pFQ1QiLCJpYXQiOjE3MTE4MDQxMjEsImV4cCI6NDg2NzU2NDEyMX0.xjVHBimcTvwTcK-vyhO_wJ4lGgHs6oM7rdR2YZTRz9A'
+  # Make sure to import aiohttp at the top of your file
 MORALIS_BASE_URL = 'https://deep-index.moralis.io/api/v2'
 
 async def fetch_transactions(wallet_address: str) -> List[dict]:
@@ -52,7 +54,7 @@ class WalletAddress(BaseModel):
 
 ##pnl utils
 async def fetch_wallet_net_worth(wallet_address: str) -> dict:
-    url = f"https://deep-index.moralis.io/api/v2.2/wallets/{wallet_address}/net-worth?exclude_spam=true&exclude_unverified_contracts=false"
+    url = f"https://deep-index.moralis.io/api/v2.2/wallets/{wallet_address}/net-worth?exclude_spam=true&exclude_unverified_contracts=true"
     
     headers = {
         "Accept": "application/json",
@@ -164,6 +166,16 @@ async def get_wallet_with_highest_pnl(db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=result["error"])
     return result
 
+@app.get("/highest_growth_wallet")
+async def read_former_highest_growth_wallet() -> Any:
+    try:
+        # Open the json file, load its content and then return it
+        with open("highest_growth_wallet.json", "r") as file:
+            data = json.load(file)
+        return JSONResponse(content=data)
+    except FileNotFoundError:
+        # If the file is not found, return an error message
+        return JSONResponse(content={"error": "File not found"}, status_code=404)
 
 
 @app.get("/wallet-overview/{wallet_address}")
@@ -346,8 +358,8 @@ async def top_holders():
         json.dump(scanned_data, f, ensure_ascii=False, indent=4)
     
     ## process the data
-    data_file = 'scanned_data_test.json'  # Adjust as needed
-    output_file = 'processed_data_test.json'  # Adjust as needed or set to None to print the result
+    data_file = 'scanned_data_test.json'  
+    output_file = 'processed_data_test.json'  
     process_and_aggregate_crypto_data(data_file, output_file)
     
     ## return the processed data
@@ -358,4 +370,13 @@ async def top_holders():
             return scanned_data
     
 
-
+@app.get('/top-holdings')
+async def get_former_processed_scan():
+    output_file = 'processed_data_test.json'  
+    
+    ## return the processed data
+    if output_file:  # Ensure output_file is not None
+        with open(output_file, 'r', encoding='utf-8') as file:
+            scanned_data = json.load(file)
+            # Now you can return or use scanned_data as needed
+            return scanned_data
