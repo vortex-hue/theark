@@ -14,9 +14,11 @@ from moralis import evm_api
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import json
-import json
 from collections import defaultdict
 import aiohttp
+from datetime import datetime, timezone
+import humanize  # You might need to install this package if not already installed
+
 
 ## sami ai analysis
 from sami_ai import sami_ai
@@ -25,8 +27,8 @@ from sami_ai import sami_ai
 app = FastAPI()
 
 MORALIS_API_URL = 'https://deep-index.moralis.io/api/v2/{address}/erc20/transfers'
-MORALIS_API_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6ImM5Y2ZiODg5LTgwYzMtNDViNy1hYzZjLTQ0YzM3MTVlNDRjZCIsIm9yZ0lkIjoiMzg1NDg4IiwidXNlcklkIjoiMzk2MDk3IiwidHlwZUlkIjoiNmNmMGE3NjEtZGFmZC00NzFhLThlZjktOGQ1MGViYzQ0NDNhIiwidHlwZSI6IlBST0pFQ1QiLCJpYXQiOjE3MTE4MDQxMjEsImV4cCI6NDg2NzU2NDEyMX0.xjVHBimcTvwTcK-vyhO_wJ4lGgHs6oM7rdR2YZTRz9A'
-  # Make sure to import aiohttp at the top of your file
+MORALIS_API_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjFjZGRmZWFiLTllYjgtNDM0NS05NjRmLWM0NjIxOTZhNGI2YyIsIm9yZ0lkIjoiMzgyMzY3IiwidXNlcklkIjoiMzkyODg4IiwidHlwZUlkIjoiNDdkNzNlNDQtMzQ3MS00MDlmLTkxY2QtNDllMTJjNmI2YjY4IiwidHlwZSI6IlBST0pFQ1QiLCJpYXQiOjE3MTAxOTA2MTUsImV4cCI6NDg2NTk1MDYxNX0.bmYG9dUG2grEjbaBXk26nZ3ZtQ0ftyn4C8CadLF8IKk'
+# Make sure to import aiohttp at the top of your file
 MORALIS_BASE_URL = 'https://deep-index.moralis.io/api/v2'
 
 async def fetch_transactions(wallet_address: str) -> List[dict]:
@@ -54,7 +56,7 @@ class WalletAddress(BaseModel):
 
 ##pnl utils
 async def fetch_wallet_net_worth(wallet_address: str) -> dict:
-    url = f"https://deep-index.moralis.io/api/v2.2/wallets/{wallet_address}/net-worth?exclude_spam=true&exclude_unverified_contracts=true"
+    url = f"https://deep-index.moralis.io/api/v2.2/wallets/{wallet_address}/net-worth?chains%5B0%5D=eth&chains%5B1%5D=avalanche&chains%5B2%5D=polygon&chains%5B3%5D=bsc&chains%5B4%5D=fantom&chains%5B5%5D=base&exclude_spam=true&exclude_unverified_contracts=true"
     
     headers = {
         "Accept": "application/json",
@@ -128,6 +130,90 @@ async def find_wallet_with_highest_growth() -> dict:
             json.dump(error_message, f)
         return error_message
 
+## market stream
+def process_market_stream(all_wallets_transactions):
+    token_volumes = {}  # Initialize dictionary to hold buy and sell volumes and additional data for each token
+    now = datetime.now(timezone.utc)  # Current time in UTC for calculating relative times
+
+    for wallet_transactions in all_wallets_transactions:
+        # Process buy transactions
+        for buy in wallet_transactions.get("buys", []):
+            timestamp = datetime.strptime(buy["block_timestamp"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+            token_symbol = buy["token_symbol"]
+            # Initialize token entry if it doesn't exist
+            if token_symbol not in token_volumes:
+                token_volumes[token_symbol] = {
+                    "buy_volume": 0, 
+                    "sell_volume": 0, 
+                    "transactions": []  # To store individual transaction details
+                }
+            token_volumes[token_symbol]["buy_volume"] += float(buy["value"])
+            # Append transaction details
+            token_volumes[token_symbol]["transactions"].append({
+                "type": "buy",
+                "token_logo": buy.get("token_logo"),
+                "contract_address": buy["from_address"],
+                "time_ago": humanize.naturaltime(now - timestamp),
+                "smw_buyer_address": buy["to_address"],
+                "possible_spam": buy.get("possible_spam", False),
+                "verified_contract": buy.get("verified_contract", False),
+                "value": buy["value"]
+            })
+
+        # Process sell transactions similarly
+        for sell in wallet_transactions.get("sells", []):
+            timestamp = datetime.strptime(sell["block_timestamp"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
+            token_symbol = sell["token_symbol"]
+            if token_symbol not in token_volumes:
+                token_volumes[token_symbol] = {
+                    "buy_volume": 0, 
+                    "sell_volume": 0, 
+                    "transactions": []
+                }
+            token_volumes[token_symbol]["sell_volume"] += float(sell["value"])
+            # Append transaction details
+            token_volumes[token_symbol]["transactions"].append({
+                "type": "sell",
+                "token_logo": sell.get("token_logo"),
+                "contract_address": sell["from_address"],
+                "smw_buyer_address": sell["to_address"],
+                "time_ago": humanize.naturaltime(now - timestamp),
+                "possible_spam": sell.get("possible_spam", False),
+                "verified_contract": sell.get("verified_contract", False),
+                "value": sell["value"]
+            })
+            
+    # Determine top gainers and losers based on net volume
+    token_net_volumes = {
+        token: volumes["buy_volume"] - volumes["sell_volume"] for token, volumes in token_volumes.items()
+    }
+    top_gainers = sorted(token_net_volumes.items(), key=lambda x: x[1], reverse=True)
+    top_losers = sorted(token_net_volumes.items(), key=lambda x: x[1])
+
+    # Prepare the final data structure with additional details
+    processed_data = {
+        "top_gainers": [
+            {
+                "token_symbol": g[0], 
+                "net_volume": g[1], 
+                "details": token_volumes[g[0]]["transactions"]  # Include transaction details
+            } for g in top_gainers
+        ],
+        "top_losers": [
+            {
+                "token_symbol": l[0], 
+                "net_volume": l[1], 
+                "details": token_volumes[l[0]]["transactions"]
+            } for l in top_losers
+        ],
+    }
+
+    # Save the processed data to a file
+    with open('processed_market_stream.json', 'w') as f:
+        json.dump(processed_data, f, ensure_ascii=False, indent=4)
+
+    return processed_data
+
 
 ## API ENDPOINT THAT I'LL EXPOSE TO THE PUBLIC
 
@@ -136,6 +222,49 @@ async def monitor_wallet(wallet_address: str):
     transactions = await fetch_transactions(wallet_address)
     buys, sells = await filter_buys_and_sells(transactions, wallet_address)
     return {"buys": buys, "sells": sells}
+
+@app.get("/recent_buy_sell")
+async def scan_and_process_wallets():
+    async with AsyncSessionLocal() as db:
+        # Fetch all wallets
+        result = await db.execute(select(Wallet))
+        wallets = result.scalars().all()
+
+    # Store transactions for all wallets
+    all_wallets_transactions = []
+
+    for wallet in wallets:
+        transactions = await fetch_transactions(wallet.address)
+        buys, sells = await filter_buys_and_sells(transactions, wallet.address)
+        all_wallets_transactions.append({
+            "wallet_address": wallet.address,
+            "buys": buys,
+            "sells": sells
+        })
+
+    # Save the scanned data to a JSON file
+    with open('wallets_transactions.json', 'w') as f:
+        json.dump(all_wallets_transactions, f)
+
+    # Process the data for market stream (this is an example, adjust according to your specific requirements)
+    market_stream_data = process_market_stream(all_wallets_transactions)
+
+    # Assuming process_market_stream returns data in the desired format, you could then save or use it as needed
+    # For demonstration, let's just return this processed data
+    return market_stream_data
+
+@app.get("/market_stream")
+async def read_market_stream_data() -> Any:
+    try:
+        # Open the json file, load its content and then return it
+        with open("processed_market_stream.json", "r") as file:
+            data = json.load(file)
+        return JSONResponse(content=data)
+    except FileNotFoundError:
+        # If the file is not found, return an error message
+        return JSONResponse(content={"error": "File not found"}, status_code=404)
+
+
 
 @app.post("/wallet/")
 async def create_wallet(wallet_address: WalletAddress, db: AsyncSession = Depends(get_db)):
@@ -176,6 +305,7 @@ async def read_former_highest_growth_wallet() -> Any:
     except FileNotFoundError:
         # If the file is not found, return an error message
         return JSONResponse(content={"error": "File not found"}, status_code=404)
+
 
 
 @app.get("/wallet-overview/{wallet_address}")
@@ -247,27 +377,26 @@ async def get_top_erc20_tokens_by_market_cap():
         raise HTTPException(status_code=400, detail=net_worth["error in getting the top crypto price movers"])
     return result
 
-
-async def fetch_wallet_data(wallet):
-    params = {
-        "chain": "eth",
-        "address": wallet.address
+import requests
+def fetch_wallet_data(wallet):
+    url = f"https://deep-index.moralis.io/api/v2.2/wallets/{wallet.address}/tokens"
+    headers = {
+        "X-API-Key":MORALIS_API_KEY,
+        "Accept": "application/json"
     }
-    # Since the actual API call is not async, wrap it in a thread pool executor
-    loop = asyncio.get_running_loop()
-    with ThreadPoolExecutor() as pool:
-        result = await loop.run_in_executor(
-            pool, 
-            evm_api.wallets.get_wallet_token_balances_price, 
-            MORALIS_API_KEY, 
-            params
-        )
+
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        # Handle non-successful responses appropriately
+        raise Exception(f"API request failed with status code {response.status_code}")
+    
+    result = response.json()
+
     return {
         "wallet_address": wallet.address,
         "portfolio_data": result
     }
-    
-    
+
 
 ## the functionality to process the wallets
 def process_and_aggregate_crypto_data(data_file_path, output_file_path=None):
@@ -350,16 +479,16 @@ async def top_holders():
         wallets = result.scalars().all()
 
     # Use asyncio.gather to run fetch_wallet_data concurrently for all wallets
-    tasks = [fetch_wallet_data(wallet) for wallet in wallets]
+    tasks = [fetch_wallet_data(wallet)  for wallet in wallets]
     scanned_data = await asyncio.gather(*tasks)
 
     # Convert the scanned_data to JSON and save it to a file
-    with open('scanned_data_test.json', 'w', encoding='utf-8') as f:
+    with open('scanned_data_prod.json', 'w', encoding='utf-8') as f:
         json.dump(scanned_data, f, ensure_ascii=False, indent=4)
     
     ## process the data
-    data_file = 'scanned_data_test.json'  
-    output_file = 'processed_data_test.json'  
+    data_file = 'scanned_data_prod.json'  
+    output_file = 'processed_data_prod.json'  
     process_and_aggregate_crypto_data(data_file, output_file)
     
     ## return the processed data
@@ -372,7 +501,7 @@ async def top_holders():
 
 @app.get('/top-holdings')
 async def get_former_processed_scan():
-    output_file = 'processed_data_test.json'  
+    output_file = 'processed_data_prod.json'  
     
     ## return the processed data
     if output_file:  # Ensure output_file is not None
@@ -380,3 +509,4 @@ async def get_former_processed_scan():
             scanned_data = json.load(file)
             # Now you can return or use scanned_data as needed
             return scanned_data
+        
