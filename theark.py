@@ -16,15 +16,23 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 from collections import defaultdict
 import aiohttp
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import humanize  # You might need to install this package if not already installed
+import httpx
+from fastapi.middleware.cors import CORSMiddleware
 
-
-## sami ai analysis
-from sami_ai import sami_ai
 
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 
 MORALIS_API_URL = 'https://deep-index.moralis.io/api/v2/{address}/erc20/transfers'
 MORALIS_API_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJub25jZSI6IjFjZGRmZWFiLTllYjgtNDM0NS05NjRmLWM0NjIxOTZhNGI2YyIsIm9yZ0lkIjoiMzgyMzY3IiwidXNlcklkIjoiMzkyODg4IiwidHlwZUlkIjoiNDdkNzNlNDQtMzQ3MS00MDlmLTkxY2QtNDllMTJjNmI2YjY4IiwidHlwZSI6IlBST0pFQ1QiLCJpYXQiOjE3MTAxOTA2MTUsImV4cCI6NDg2NTk1MDYxNX0.bmYG9dUG2grEjbaBXk26nZ3ZtQ0ftyn4C8CadLF8IKk'
@@ -498,6 +506,22 @@ async def top_holders():
             # Now you can return or use scanned_data as needed
             return scanned_data
     
+
+
+scheduler = AsyncIOScheduler()
+async def call_top_holders():
+    await top_holders()
+  
+# Schedule the task to run once daily
+scheduler.add_job(call_top_holders, 'interval', days=1, next_run_time=datetime.now())
+
+# Start the scheduler
+scheduler.start()
+
+# Optional: Shutdown the scheduler when the application stops
+@app.on_event("shutdown")
+def shutdown_event():
+    scheduler.shutdown()
 
 @app.get('/top-holdings')
 async def get_former_processed_scan():
