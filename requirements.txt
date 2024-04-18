@@ -12,7 +12,6 @@ frozenlist==1.4.1
 greenlet==3.0.3
 h11==0.14.0
 idna==3.6
-moralis==0.1.45
 multidict==6.0.5
 pydantic==2.6.4
 pydantic_core==2.16.3
