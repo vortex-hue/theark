@@ -22,6 +22,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import humanize  # You might need to install this package if not already installed
 import httpx
 from fastapi.middleware.cors import CORSMiddleware
+import orjson
+import aiofiles
 
 
 
@@ -110,7 +112,25 @@ def calculate_wallet_pnl(wallets: List[Dict[str, Any]]) -> Dict[str, Dict[str, f
             pnl_data[wallet_address]["positions"].append(position_pnl)
 
     return pnl_data
+ 
 
+## API ENDPOINT THAT I'LL EXPOSE TO THE PUBLIC
+
+@app.get("/portfolio/{wallet_address}")
+async def monitor_wallet(wallet_address: str):
+    url = f"https://api.zerion.io/v1/wallets/{wallet_address}/positions/?filter[deposit, loan, locked, staked, reward, wallet, airdrop, margin]=no_filter&currency=usd&filter[deposit, loan, locked, staked, reward, wallet, airdrop, margin]=,&filter[trash]=only_non_trash&sort=-value"
+
+    headers = {
+        "accept": "application/json",
+        "authorization": "Basic emtfZGV2Xzc1Y2MyNGI2NjFkYzRiZmQ5YWU1ZDI4MDQ3MTM2NmRjOg=="
+    }
+
+    response = requests.get(url, headers=headers)
+    data = json.loads(response.text)
+    
+    return JSONResponse(content=data)
+
+ 
 ## market stream
 def process_market_stream(all_wallets_transactions):
     token_volumes = {}  # Initialize dictionary to hold buy and sell volumes and additional data for each token
@@ -196,56 +216,8 @@ def process_market_stream(all_wallets_transactions):
     return processed_data
 
 
-## API ENDPOINT THAT I'LL EXPOSE TO THE PUBLIC
 
-@app.get("/portfolio/{wallet_address}")
-async def monitor_wallet(wallet_address: str):
-    url = f"https://api.zerion.io/v1/wallets/{wallet_address}/positions/?filter[deposit, loan, locked, staked, reward, wallet, airdrop, margin]=no_filter&currency=usd&filter[deposit, loan, locked, staked, reward, wallet, airdrop, margin]=,&filter[trash]=only_non_trash&sort=-value"
-
-    headers = {
-        "accept": "application/json",
-        "authorization": "Basic emtfZGV2Xzc1Y2MyNGI2NjFkYzRiZmQ5YWU1ZDI4MDQ3MTM2NmRjOg=="
-    }
-
-    response = requests.get(url, headers=headers)
-    data = json.loads(response.text)
-    
-    return JSONResponse(content=data)
-
-@app.get("/recent_buy_sell")
-async def scan_and_process_wallets():
-    async with AsyncSessionLocal() as db:
-        # Fetch all wallets
-        result = await db.execute(select(Wallet))
-        wallets = result.scalars().all()
-
-    # Store transactions for all wallets
-    all_wallets_transactions = []
-
-    for wallet in wallets:
-        transactions = await fetch_transactions(wallet.address)
-        buys, sells = await filter_buys_and_sells(transactions, wallet.address)
-        all_wallets_transactions.append({
-            "wallet_address": wallet.address,
-            "buys": buys,
-            "sells": sells
-        })
-
-    # Save the scanned data to a JSON file
-    with open('wallets_transactions.json', 'w') as f:
-        json.dump(all_wallets_transactions, f)
-
-    # Process the data for market stream (this is an example, adjust according to your specific requirements)
-    market_stream_data = process_market_stream(all_wallets_transactions)
-
-    # Assuming process_market_stream returns data in the desired format, you could then save or use it as needed
-    # For demonstration, let's just return this processed data
-    return market_stream_data
-
-
-
-@app.get("/transact/{address}")
-async def all_transactions(address) -> Any:
+async def fetch_transact(address) -> Any:
     try:
         url = f"https://api.zerion.io/v1/wallets/{address}/transactions/"
 
@@ -261,6 +233,36 @@ async def all_transactions(address) -> Any:
     except "error":
         # If the file is not found, return an error message
         return JSONResponse(content={"error": "File not found"}, status_code=404)
+
+
+@app.get("/recent_buy_sell")
+async def scan_and_process_wallets():
+    async with AsyncSessionLocal() as db:
+        # Fetch all wallets
+        result = await db.execute(select(Wallet))
+        wallets = result.scalars().all()
+
+    # Store transactions for all wallets
+    all_wallets_transactions = []
+
+    for wallet in wallets:
+        transactions = await fetch_transact(wallet.address)
+        all_wallets_transactions.append({
+            "wallet_address": wallet.address,
+            "transactions": transactions
+        })
+
+    # Save the scanned data to a JSON file
+    with open('zerion_test_wallets_transactions.json', 'w') as f:
+        json.dump(all_wallets_transactions, f)
+
+    # Process the data for market stream (this is an example, adjust according to your specific requirements)
+    ##market_stream_data = process_market_stream(all_wallets_transactions)
+
+    # Assuming process_market_stream returns data in the desired format, you could then save or use it as needed
+    # For demonstration, let's just return this processed data
+    return market_stream_data
+
 
 
 
@@ -328,7 +330,7 @@ async def wallet_overview(wallet_address: str):
 
 
 async def fetch_wallet_data(wallet):
-    url = f"https://api.zerion.io/v1/wallets/{wallet.address}/positions/?filter[wallet]=no_filter&currency=usd&filter[deposit, loan, locked, staked, reward, wallet, airdrop, margin]=,&filter[trash]=only_non_trash&sort=-value"
+    url = f"https://api.zerion.io/v1/wallets/{wallet.address}/positions/?filter[wallet]=no_filter&currency=usd&filter[wallet]=,&filter[trash]=only_non_trash&sort=-value"
 
     headers = {
         "accept": "application/json",
@@ -454,6 +456,7 @@ def process_and_aggregate_crypto_data(wallets: List[Dict[str, Any]]) -> List[Dic
     result = sorted(aggregated_data.values(), key=lambda x: x['holders_count'], reverse=True)
     return result
 
+@app.get("/top")
 async def top_holding():
     async with AsyncSessionLocal() as db:  # Assuming AsyncSessionLocal is an async session maker
         result = await db.execute(select(Wallet))
@@ -476,37 +479,48 @@ async def top_holding():
     processed_data = process_and_aggregate_crypto_data(data)
     
     ## save in json
-    with open('top_holdings_data.json', 'w', encoding='utf-8') as f:
+    with open('final_zerion_top_holdings_data.json', 'w', encoding='utf-8') as f:
         json.dump(processed_data, f, ensure_ascii=False, indent=4)
 
     # Return the processed data
     return processed_data
 
+
+# Cache variable
+cache_data = None
+data_loaded = False
+
+@app.on_event("startup")
+async def load_data():
+    global cache_data, data_loaded
+    try:
+        async with aiofiles.open("test_processed_data_prod.json", "r") as file:
+            content = await file.read()
+            cache_data = orjson.loads(content)
+        data_loaded = True  # Set true if data is loaded successfully
+    except FileNotFoundError:
+        cache_data = {"error": "File not found", "status_code": 404}
+        data_loaded = False  # Indicate that data loading failed
+
 @app.get("/top-holdings")
 async def smw_top_holdings_token():
-    ## NB: change the json data to the prod onces in deployment
-    try:
-        # Open the json file, load its content and then return it
-        with open("test_processed_data_prod.json", "r") as file:
-            data = json.load(file)
-        return JSONResponse(content=data)
-    except FileNotFoundError:
-        # If the file is not found, return an error message
-        return JSONResponse(content={"error": "File not found"}, status_code=404)
-
+    if not data_loaded:
+        # If data was not loaded successfully, return the error message.
+        return JSONResponse(content=cache_data, status_code=404)
+    return JSONResponse(content=cache_data)
 
     
 @app.get("/process-saved-data")
 async def process_saved_data():
     # Read the previously scanned data from a file
-    with open('test_scan.json', 'r', encoding='utf-8') as f:
+    with open('position_holdings_scan.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
     
     # Process the data
     processed_data = process_and_aggregate_crypto_data(data)
     
     # Save the processed data to a new JSON file
-    with open('test_processed_data_prod.json', 'w', encoding='utf-8') as f:
+    with open('final_wallet_zerion_processed_data_prod.json', 'w', encoding='utf-8') as f:
         json.dump(processed_data, f, ensure_ascii=False, indent=4)
 
     # Return the processed data
