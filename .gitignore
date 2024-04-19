@@ -2,4 +2,6 @@ test.py
 test2.py
 wallet.py
 spider.json
-env
+env/*
+test data/*
+Test DB/*

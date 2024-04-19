@@ -131,133 +131,228 @@ async def monitor_wallet(wallet_address: str):
     return JSONResponse(content=data)
 
  
-## market stream
+# ## market stream
+# def process_market_stream(all_wallets_transactions):
+    token_volumes = {}
+    now = datetime.now(timezone.utc)  # Current UTC time
+
+    for wallet_data in all_wallets_transactions:
+        transactions = wallet_data.get("transactions", {}).get("portfolio_data", {}).get("data", [])
+        for transaction in transactions:
+            # Debugging output to check the type of 'transaction'
+            print(f"Type of transaction: {type(transaction)}")
+            if not isinstance(transaction, dict):
+                print("Error: transaction is not a dictionary.")
+                continue  # Skip to the next transaction if the current one is not a dictionary
+
+            attributes = transaction.get("attributes", {})
+            if 'operation_type' in attributes and attributes['operation_type'] == 'receive':
+                # Extracting token information
+                token_info = attributes.get('fee', {}).get('fungible_info', {})
+                token_symbol = token_info.get('symbol', 'ETH')  # Default to ETH if not specified
+                token_name = token_info.get('name', 'Ethereum')  # Default to Ethereum if not specified
+
+                timestamp = datetime.strptime(attributes['mined_at'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                
+                if token_symbol not in token_volumes:
+                    token_volumes[token_symbol] = {
+                        "buy_volume": 0,
+                        "sell_volume": 0,
+                        "transactions": []
+                    }
+
+                # Calculate transaction value
+                quantity = attributes.get('fee', {}).get('quantity', {}).get('float', 0)
+                price = attributes.get('fee', {}).get('price', 0)
+                value = attributes.get('value')
+
+                token_volumes[token_symbol]["buy_volume"] += quantity
+                token_volumes[token_symbol]["sell_volume"] += quantity
+
+                # Appending transaction with additional details
+                token_volumes[token_symbol]["transactions"].append({
+                    "type": "receive",
+                    "token_name": token_name,
+                    "token_symbol": token_symbol,
+                    "token_logo": token_info.get('icon', {}).get('url', ""),
+                    "contract_address": attributes['sent_from'],
+                    "time_ago": humanize.naturaltime(now - timestamp),
+                    "smw_buyer_address": attributes['sent_to'],
+                    "possible_spam": attributes.get('flags', {}).get('is_trash', False),
+                    "verified_contract": token_info.get('flags', {}).get('verified', False),
+                    "transaction_hash": attributes.get('hash', 'N/A'),  # Default to 'N/A' if hash is not available
+                    "value": value
+                })
+
+    with open('zerion_market_stream_transactions.json', 'w', encoding='utf-8') as f:
+        json.dump(token_volumes, f, ensure_ascii=False, indent=4)
+    
+    return token_volumes  # Return or further processing
+
+
 def process_market_stream(all_wallets_transactions):
-    token_volumes = {}  # Initialize dictionary to hold buy and sell volumes and additional data for each token
-    now = datetime.now(timezone.utc)  # Current time in UTC for calculating relative times
+    token_volumes = {}
+    now = datetime.now(timezone.utc)  # Current UTC time
 
-    for wallet_transactions in all_wallets_transactions:
-        # Process buy transactions
-        for buy in wallet_transactions.get("buys", []):
-            timestamp = datetime.strptime(buy["block_timestamp"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
-            token_symbol = buy["token_symbol"]
-            # Initialize token entry if it doesn't exist
-            if token_symbol not in token_volumes:
-                token_volumes[token_symbol] = {
-                    "buy_volume": 0, 
-                    "sell_volume": 0, 
-                    "transactions": []  # To store individual transaction details
-                }
-            token_volumes[token_symbol]["buy_volume"] += float(buy["value"])
-            # Append transaction details
-            token_volumes[token_symbol]["transactions"].append({
-                "type": "buy",
-                "token_logo": buy.get("token_logo"),
-                "contract_address": buy["from_address"],
-                "time_ago": humanize.naturaltime(now - timestamp),
-                "smw_buyer_address": buy["to_address"],
-                "possible_spam": buy.get("possible_spam", False),
-                "verified_contract": buy.get("verified_contract", False),
-                "value": buy["value"]
-            })
+    for wallet_data in all_wallets_transactions:
+        transactions = wallet_data.get("transactions", {}).get("portfolio_data", {}).get("data", [])
+        for transaction in transactions:
+            if not isinstance(transaction, dict):
+                print("Error: transaction is not a dictionary.")
+                continue  # Skip to the next transaction if the current one is not a dictionary
 
-        # Process sell transactions similarly
-        for sell in wallet_transactions.get("sells", []):
-            timestamp = datetime.strptime(sell["block_timestamp"], "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
-            token_symbol = sell["token_symbol"]
-            if token_symbol not in token_volumes:
-                token_volumes[token_symbol] = {
-                    "buy_volume": 0, 
-                    "sell_volume": 0, 
-                    "transactions": []
-                }
-            token_volumes[token_symbol]["sell_volume"] += float(sell["value"])
-            # Append transaction details
-            token_volumes[token_symbol]["transactions"].append({
-                "type": "sell",
-                "token_logo": sell.get("token_logo"),
-                "contract_address": sell["from_address"],
-                "smw_buyer_address": sell["to_address"],
-                "time_ago": humanize.naturaltime(now - timestamp),
-                "possible_spam": sell.get("possible_spam", False),
-                "verified_contract": sell.get("verified_contract", False),
-                "value": sell["value"]
-            })
-            
-    # Determine top gainers and losers based on net volume
-    token_net_volumes = {
-        token: volumes["buy_volume"] - volumes["sell_volume"] for token, volumes in token_volumes.items()
-    }
-    top_gainers = sorted(token_net_volumes.items(), key=lambda x: x[1], reverse=True)
-    top_losers = sorted(token_net_volumes.items(), key=lambda x: x[1])
+            attributes = transaction.get("attributes", {})
+            operation_type = attributes.get("operation_type", "").lower()
 
-    # Prepare the final data structure with additional details
-    processed_data = {
-        "top_gainers": [
-            {
-                "token_symbol": g[0], 
-                "net_volume": g[1], 
-                "details": token_volumes[g[0]]["transactions"]  # Include transaction details
-            } for g in top_gainers
-        ],
-        "top_losers": [
-            {
-                "token_symbol": l[0], 
-                "net_volume": l[1], 
-                "details": token_volumes[l[0]]["transactions"]
-            } for l in top_losers
-        ],
-    }
+            if operation_type in ['receive', 'send']:
+                token_info = attributes.get('fee', {}).get('fungible_info', {})
+                token_symbol = token_info.get('symbol', 'ETH')  # Default to ETH if not specified
+                token_name = token_info.get('name', 'Ethereum')  # Default to Ethereum if not specified
 
-    # Save the processed data to a file
-    with open('processed_market_stream.json', 'w') as f:
-        json.dump(processed_data, f, ensure_ascii=False, indent=4)
+                timestamp = datetime.strptime(attributes['mined_at'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                
+                if token_symbol not in token_volumes:
+                    token_volumes[token_symbol] = {
+                        "buy_volume": 0,
+                        "sell_volume": 0,
+                        "transactions": []
+                    }
 
-    return processed_data
+                quantity = attributes.get('fee', {}).get('quantity', {}).get('float', 0)
+                price = attributes.get('fee', {}).get('price')
+                if price is None:
+                    print(f"Warning: Price is None for transaction {attributes.get('hash', 'N/A')}")
+                    price = 0  # Default price to 0 if none provided
 
+                value = quantity * price
 
+                if operation_type == 'receive':
+                    token_volumes[token_symbol]["buy_volume"] += value
+                    transaction_type = "buy"
+                else:
+                    token_volumes[token_symbol]["sell_volume"] += value
+                    transaction_type = "sell"
 
-async def fetch_transact(address) -> Any:
-    try:
-        url = f"https://api.zerion.io/v1/wallets/{address}/transactions/"
+                token_volumes[token_symbol]["transactions"].append({
+                    "type": transaction_type,
+                    "token_name": token_name,
+                    "token_symbol": token_symbol,
+                    "token_logo": token_info.get('icon', {}).get('url', ""),
+                    "contract_address": attributes['sent_from'],
+                    "time_ago": humanize.naturaltime(now - timestamp),
+                    "smw_buyer_address": attributes['sent_to'],
+                    "possible_spam": attributes.get('flags', {}).get('is_trash', False),
+                    "verified_contract": token_info.get('flags', {}).get('verified', False),
+                    "transaction_hash": attributes.get('hash', 'N/A'),
+                    "value": value
+                })
 
-        headers = {
-        "accept": "application/json",
-        "authorization": "Basic emtfZGV2Xzc1Y2MyNGI2NjFkYzRiZmQ5YWU1ZDI4MDQ3MTM2NmRjOg=="
-        }
-
-        response = requests.get(url, headers=headers)
-        data = json.loads(response.text)
-        
-        return JSONResponse(content=data)
-    except "error":
-        # If the file is not found, return an error message
-        return JSONResponse(content={"error": "File not found"}, status_code=404)
+    with open('zerion_market_stream_transactions.json', 'w', encoding='utf-8') as f:
+        json.dump(token_volumes, f, ensure_ascii=False, indent=4)
+    
+    return token_volumes  # Return the processed data
 
 
 @app.get("/recent_buy_sell")
+async def fetch_transactions_for_wallet(address: str):
+    url = f"https://api.zerion.io/v1/wallets/{address}/transactions/?currency=usd&filter%5Btrash%5D=no_filter"
+    
+    headers = {
+        "accept": "application/json",
+        "authorization": "Basic emtfZGV2Xzc1Y2MyNGI2NjFkYzRiZmQ5YWU1ZDI4MDQ3MTM2NmRjOg=="
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            if response.status != 200:
+                raise HTTPException(status_code=response.status, detail=f"Failed to fetch data from Zerion API. Status code: {response.status}")
+            
+            data = await response.json()  # Directly parsing response to JSON
+            print("STARTING TRANSACTION SCANNING>>>>>")
+            
+            # Assuming the correct key path to the transactions is checked
+            transactions_data = data.get('data', [])
+            print(transactions_data)
+            
+            if not transactions_data:
+                print("No transactions found in the data received from API.")
+                return {
+                    "wallet_address": address,
+                    "transactions": [],
+                    "error": "No transactions available or wrong data path in response."
+                }
+            
+            transactions_list = []
+            for txn in transactions_data:
+                attributes = txn.get("attributes", {})
+                fee_info = attributes.get("fee", {}).get("fungible_info", {})
+                transactions_list.append({
+                    "type": txn.get("type"),
+                    "transaction_id": txn.get("id"),
+                    "operation_type": attributes.get("operation_type"),
+                    "transaction_hash": attributes.get("hash"),
+                    "mined_at_block": attributes.get("mined_at_block"),
+                    "mined_at": attributes.get("mined_at"),
+                    "sent_from": attributes.get("sent_from"),
+                    "sent_to": attributes.get("sent_to"),
+                    "status": attributes.get("status"),
+                    "nonce": attributes.get("nonce"),
+                    "fee_info": fee_info.get("name"),
+                    "token_symbol": fee_info.get("symbol"),
+                    "token_icon_url": fee_info.get("icon", {}).get("url"),
+                    "value": attributes.get("value", 0)
+                })
+
+            return {
+                "wallet_address": address,
+                "transactions": transactions_list
+            }
+
+
+async def fetch_transact(address):
+    url = f"https://api.zerion.io/v1/wallets/{address}/transactions/"
+    
+    headers = {
+        "accept": "application/json",
+        "authorization": "Basic emtfZGV2Xzc1Y2MyNGI2NjFkYzRiZmQ5YWU1ZDI4MDQ3MTM2NmRjOg=="
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as response:
+            response_text = await response.text()
+            print("STARTING TRANSACTION SCANNING>>>>>")
+            data = json.loads(response_text)
+            return {
+                "wallet_address": address,
+                "portfolio_data": data
+            }
+            
+
+@app.get("/market-streams-smw")
 async def scan_and_process_wallets():
-    async with AsyncSessionLocal() as db:
-        # Fetch all wallets
-        result = await db.execute(select(Wallet))
-        wallets = result.scalars().all()
+    # async with AsyncSessionLocal() as db:
+    #     # Fetch all wallets
+    #     result = await db.execute(select(Wallet))
+    #     wallets = result.scalars().all()
 
-    # Store transactions for all wallets
-    all_wallets_transactions = []
+    # # Store transactions for all wallets
+    # all_wallets_transactions = []
 
-    for wallet in wallets:
-        transactions = await fetch_transact(wallet.address)
-        all_wallets_transactions.append({
-            "wallet_address": wallet.address,
-            "transactions": transactions
-        })
+    # for wallet in wallets:
+    #     transactions = await fetch_transact(wallet.address)
+    #     all_wallets_transactions.append({
+    #         "wallet_address": wallet.address,
+    #         "transactions": transactions
+    #     })
 
     # Save the scanned data to a JSON file
-    with open('zerion_test_wallets_transactions.json', 'w') as f:
-        json.dump(all_wallets_transactions, f)
-
+    # with open('zerion_test_wallets_transactions.json', 'w', encoding='utf-8') as f:
+    #     json.dump(all_wallets_transactions, f, ensure_ascii=False, indent=4)
+    with open('zerion_test_wallets_transactions.json', 'r', encoding='utf-8') as f:
+        data = json.load(f)
+        
     # Process the data for market stream (this is an example, adjust according to your specific requirements)
-    ##market_stream_data = process_market_stream(all_wallets_transactions)
+    market_stream_data = process_market_stream(data)
 
     # Assuming process_market_stream returns data in the desired format, you could then save or use it as needed
     # For demonstration, let's just return this processed data
@@ -467,11 +562,11 @@ async def top_holding():
     scanned_data = await asyncio.gather(*tasks)
 
     # Convert the scanned_data to JSON and save it to a file
-    with open('position_holdings_scan.json', 'w', encoding='utf-8') as f:
+    with open('10_wallet_position_holdings_scan.json', 'w', encoding='utf-8') as f:
         json.dump(scanned_data, f, ensure_ascii=False, indent=4)
     
    # Ensure scanned_data contains the results, not coroutines
-    with open('position_holdings_scan.json', 'r', encoding='utf-8') as f:
+    with open('10_wallet_position_holdings_scan.json', 'r', encoding='utf-8') as f:
         data = f
     
     
@@ -479,7 +574,7 @@ async def top_holding():
     processed_data = process_and_aggregate_crypto_data(data)
     
     ## save in json
-    with open('final_zerion_top_holdings_data.json', 'w', encoding='utf-8') as f:
+    with open('10_wallets_final_zerion_top_holdings_data.json', 'w', encoding='utf-8') as f:
         json.dump(processed_data, f, ensure_ascii=False, indent=4)
 
     # Return the processed data
@@ -513,14 +608,14 @@ async def smw_top_holdings_token():
 @app.get("/process-saved-data")
 async def process_saved_data():
     # Read the previously scanned data from a file
-    with open('position_holdings_scan.json', 'r', encoding='utf-8') as f:
+    with open('10_wallet_position_holdings_scan.json', 'r', encoding='utf-8') as f:
         data = json.load(f)
     
     # Process the data
     processed_data = process_and_aggregate_crypto_data(data)
     
     # Save the processed data to a new JSON file
-    with open('final_wallet_zerion_processed_data_prod.json', 'w', encoding='utf-8') as f:
+    with open('10_wallets_final_zerion_top_holdings_data.json', 'w', encoding='utf-8') as f:
         json.dump(processed_data, f, ensure_ascii=False, indent=4)
 
     # Return the processed data
