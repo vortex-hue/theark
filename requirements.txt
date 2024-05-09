@@ -1,4 +1,9 @@
 fastapi
+aiosqlite
+apscheduler
+asyncio
+aiohttp
+starlette
 gunicorn
 uvicorn
 sqlalchemy
