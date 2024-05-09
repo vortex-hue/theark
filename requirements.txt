@@ -7,9 +7,6 @@ starlette
 aiohttp
 requests
 typing
-json
-collections
-datetime
 humanize
 httpx
 orjson
