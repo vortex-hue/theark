@@ -5,3 +5,9 @@ spider.json
 env
 'test data'/*
 'Test DB'/*
+wallet_position_holdings_scan.json
+'test data'
+'Test DB'
+env
+check.txt
+checkout

@@ -11,7 +11,7 @@ This is the beta and very first version of Theark analytics, an onchain tool tha
 - `pip install -r requirements.txt`
 - `uvicorn theark.py:app --reload`
 
-NB: Make sure to have python running locally on your computer, also there's a few resources you'll need to install along the way, just watch out for the prompts on the terminal to see those
+NB: Make sure to have python running locally on your computer, also there's a few resources you'll need to install along the way, just watch out for the prompts on the terminal to see those, and also some dependencies are not required
 
 ### Contact Developer For Maintainance
 To contact the developer for maintainance and updating, kindly reach via email through [peter@qubic.org.ng](emailto:peter@qubic.org.ng)
